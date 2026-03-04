@@ -1405,7 +1405,7 @@ async function handleMessagesRequest(req, res) {
       .sendNotification('systemError', {
         title: 'Claude Relay API 错误',
         platform: 'claude',
-        apiKey: req.apiKey?.name || req.apiKey?.id || 'N/A',
+        apiKeyName: req.apiKey?.name || req.apiKey?.id || 'N/A',
         path: req.path,
         method: req.method,
         error: rawErrorStr
