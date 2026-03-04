@@ -43,7 +43,7 @@ const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { parseSSELine } = require('../utils/sseParser')
 const { sanitizeUpstreamError } = require('../utils/errorSanitizer')
 const { cleanJsonSchemaForGemini } = require('../utils/geminiSchemaCleaner')
-const im = require('../utils/im')
+const webhookService = require('./webhookService')
 const {
   dumpAnthropicNonStreamResponse,
   dumpAnthropicStreamSummary
@@ -2181,19 +2181,21 @@ async function handleAnthropicMessagesToGemini(req, res, { vendor, baseModel }) 
 
       return res.status(200).json(responseBody)
     } catch (error) {
-      // 发送 IM 通知 - 输出原始错误信息
+      // 发送 Webhook 通知
       const rawError = error.response?.data || error.message || error
       const rawErrorStr =
         typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2)
-      im.sendMessage({
-        message:
-          `❌ Gemini API 非流式请求错误\n` +
-          `Vendor: ${vendor}\n` +
-          `Account: ${accountId}\n` +
-          `Model: ${effectiveModel}\n` +
-          `原始错误信息:\n${rawErrorStr}`,
-        group: 'test'
-      }).catch((e) => logger.warn('Failed to send IM notification:', e))
+      webhookService
+        .sendNotification('systemError', {
+          title: 'Gemini API 非流式请求错误',
+          platform: 'gemini',
+          apiKey: req.apiKey?.name || req.apiKey?.id || 'N/A',
+          vendor,
+          accountId,
+          model: effectiveModel,
+          error: rawErrorStr
+        })
+        .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
       const sanitized = sanitizeUpstreamError(error)
       logger.error('Upstream Gemini error (via /v1/messages):', sanitized)
@@ -2941,16 +2943,18 @@ async function handleAnthropicMessagesToGemini(req, res, { vendor, baseModel }) 
       const sanitized = sanitizeUpstreamError(error)
       logger.error('Upstream Gemini stream error (via /v1/messages):', sanitized)
 
-      // 发送 IM 通知 - 输出完整错误 JSON
-      im.sendMessage({
-        message:
-          `❌ Gemini API 流式响应错误\n` +
-          `Vendor: ${vendor}\n` +
-          `Account: ${accountId}\n` +
-          `Model: ${effectiveModel}\n` +
-          `完整错误信息:\n${JSON.stringify(sanitized, null, 2)}`,
-        group: 'test'
-      }).catch((e) => logger.warn('Failed to send IM notification:', e))
+      // 发送 Webhook 通知
+      webhookService
+        .sendNotification('systemError', {
+          title: 'Gemini API 流式响应错误',
+          platform: 'gemini',
+          apiKey: req.apiKey?.name || req.apiKey?.id || 'N/A',
+          vendor,
+          accountId,
+          model: effectiveModel,
+          error: sanitized
+        })
+        .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
       writeAnthropicSseEvent(
         res,
@@ -2977,18 +2981,20 @@ async function handleAnthropicMessagesToGemini(req, res, { vendor, baseModel }) 
     // 2. 打印安全日志，绝对不会崩
     logger.error(`❌ [Critical] Failed to start Gemini stream. 错误详情:\n${safeErrorDetails}`)
 
-    // 发送 IM 通知 - 输出原始错误信息
+    // 发送 Webhook 通知
     const rawError = error.response?.data || error.message || error
     const rawErrorStr = typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2)
-    im.sendMessage({
-      message:
-        `❌ Gemini API 流式请求错误\n` +
-        `Vendor: ${vendor}\n` +
-        `Account: ${accountId}\n` +
-        `Model: ${effectiveModel}\n` +
-        `原始错误信息:\n${rawErrorStr}`,
-      group: 'test'
-    }).catch((e) => logger.warn('Failed to send IM notification:', e))
+    webhookService
+      .sendNotification('systemError', {
+        title: 'Gemini API 流式请求错误',
+        platform: 'gemini',
+        apiKey: req.apiKey?.name || req.apiKey?.id || 'N/A',
+        vendor,
+        accountId,
+        model: effectiveModel,
+        error: rawErrorStr
+      })
+      .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
     const sanitized = sanitizeUpstreamError(error)
 

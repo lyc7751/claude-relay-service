@@ -13,7 +13,7 @@ const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const userMessageQueueService = require('../userMessageQueueService')
 const { isStreamWritable } = require('../../utils/streamHelper')
 const { filterForClaude } = require('../../utils/headerFilter')
-const im = require('../../utils/im')
+const webhookService = require('../webhookService')
 
 class ClaudeConsoleRelayService {
   constructor() {
@@ -309,17 +309,19 @@ class ClaudeConsoleRelayService {
           `📝 Upstream error response from ${account?.name || accountId}: ${rawData.substring(0, 500)}`
         )
 
-        // 发送 IM 通知 - 输出原始错误信息
+        // 发送 Webhook 通知
         const rawErrorData =
           typeof response.data === 'string' ? response.data : JSON.stringify(response.data, null, 2)
-        im.sendMessage({
-          message:
-            `❌ Claude Console 非流式请求错误\n` +
-            `Account: ${account?.name || accountId}\n` +
-            `Status: ${response.status}\n` +
-            `原始错误信息:\n${rawErrorData}`,
-          group: 'test'
-        }).catch((e) => logger.warn('Failed to send IM notification:', e))
+        webhookService
+          .sendNotification('systemError', {
+            title: 'Claude Console 非流式请求错误',
+            platform: 'claude-console',
+            apiKey: apiKeyData.name || apiKeyData.id,
+            account: account?.name || accountId,
+            status: response.status,
+            error: rawErrorData
+          })
+          .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
         // 记录清理后的数据到error
         try {
@@ -678,6 +680,7 @@ class ClaudeConsoleRelayService {
         usageCallback,
         streamTransformer,
         options,
+        apiKeyData,
         // 📬 回调：在收到响应头时释放队列锁
         async () => {
           if (queueLockAcquired && queueRequestId && accountId) {
@@ -711,18 +714,20 @@ class ClaudeConsoleRelayService {
           error
         )
 
-        // 发送 IM 通知 - 输出原始错误信息
+        // 发送 Webhook 通知
         const rawError = error.response?.data || error.message || error
         const rawErrorStr =
           typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2)
-        im.sendMessage({
-          message:
-            `❌ Claude Console 流式请求错误\n` +
-            `Account: ${account?.name || accountId}\n` +
-            `Request ID: ${requestId}\n` +
-            `原始错误信息:\n${rawErrorStr}`,
-          group: 'test'
-        }).catch((e) => logger.warn('Failed to send IM notification:', e))
+        webhookService
+          .sendNotification('systemError', {
+            title: 'Claude Console 流式请求错误',
+            platform: 'claude-console',
+            apiKey: apiKeyData.name || apiKeyData.id,
+            account: account?.name || accountId,
+            requestId,
+            error: rawErrorStr
+          })
+          .catch((e) => logger.warn('Failed to send webhook notification:', e))
       }
       throw error
     } finally {
@@ -777,6 +782,7 @@ class ClaudeConsoleRelayService {
     usageCallback,
     streamTransformer = null,
     requestOptions = {},
+    apiKeyData = {},
     onResponseHeaderReceived = null
   ) {
     return new Promise((resolve, reject) => {
@@ -869,15 +875,17 @@ class ClaudeConsoleRelayService {
                 `📝 [Stream] Upstream error response from ${account?.name || accountId}: ${errorDataForCheck.substring(0, 500)}`
               )
 
-              // 发送 IM 通知 - 输出原始错误信息
-              im.sendMessage({
-                message:
-                  `❌ Claude Console 流式响应错误状态\n` +
-                  `Account: ${account?.name || accountId}\n` +
-                  `Status: ${response.status}\n` +
-                  `原始错误信息:\n${errorDataForCheck}`,
-                group: 'test'
-              }).catch((e) => logger.warn('Failed to send IM notification:', e))
+              // 发送 Webhook 通知
+              webhookService
+                .sendNotification('systemError', {
+                  title: 'Claude Console 流式响应错误状态',
+                  platform: 'claude-console',
+                  apiKey: apiKeyData.name || apiKeyData.id,
+                  account: account?.name || accountId,
+                  status: response.status,
+                  error: errorDataForCheck
+                })
+                .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
               // 检查是否为账户禁用错误
               const accountDisabledError = isAccountDisabledError(
@@ -1295,17 +1303,19 @@ class ClaudeConsoleRelayService {
               error
             )
 
-            // 发送 IM 通知 - 输出原始错误信息
+            // 发送 Webhook 通知
             const rawError = error.response?.data || error.message || error
             const rawErrorStr =
               typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2)
-            im.sendMessage({
-              message:
-                `❌ Claude Console 流式响应错误\n` +
-                `Account: ${account?.name || accountId}\n` +
-                `原始错误信息:\n${rawErrorStr}`,
-              group: 'test'
-            }).catch((e) => logger.warn('Failed to send IM notification:', e))
+            webhookService
+              .sendNotification('systemError', {
+                title: 'Claude Console 流式响应错误',
+                platform: 'claude-console',
+                apiKey: apiKeyData.name || apiKeyData.id,
+                account: account?.name || accountId,
+                error: rawErrorStr
+              })
+              .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
             if (isStreamWritable(responseStream)) {
               // 如果有 streamTransformer（如测试请求），使用前端期望的格式
