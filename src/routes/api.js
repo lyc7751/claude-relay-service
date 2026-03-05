@@ -1398,20 +1398,6 @@ async function handleMessagesRequest(req, res) {
       stack: handledError.stack
     })
 
-    // 发送 Webhook 通知
-    const rawError = handledError.response?.data || handledError
-    const rawErrorStr = typeof rawError === 'string' ? rawError : JSON.stringify(rawError, null, 2)
-    webhookService
-      .sendNotification('systemError', {
-        title: 'Claude Relay API 错误',
-        platform: 'claude',
-        apiKeyName: req.apiKey?.name || req.apiKey?.id || 'N/A',
-        path: req.path,
-        method: req.method,
-        error: rawErrorStr
-      })
-      .catch((e) => logger.warn('Failed to send webhook notification:', e))
-
     // 确保在任何情况下都能返回有效的JSON响应
     if (!res.headersSent) {
       // 根据错误类型设置适当的状态码
@@ -1437,6 +1423,38 @@ async function handleMessagesRequest(req, res) {
         statusCode = 502
         errorType = 'Upstream hostname resolution failed'
       }
+
+      // 发送 Webhook 通知
+      const rawError = handledError.response?.data || handledError
+      // 如果是对象，删除 stack 属性
+      let processedError = rawError
+      if (typeof rawError === 'object' && rawError !== null) {
+        processedError = { ...rawError }
+        delete processedError.stack
+      }
+      const rawErrorStr =
+        typeof processedError === 'string'
+          ? processedError
+          : JSON.stringify(processedError, null, 2)
+
+      // 组装sanitizedError对象
+      const sanitizedError = {
+        status: statusCode,
+        code: errorType,
+        message: handledError.message || 'An unexpected error occurred',
+        timestamp: new Date().toISOString()
+      }
+      webhookService
+        .sendNotification('systemError', {
+          title: 'Claude Relay API 错误',
+          platform: 'claude',
+          apiKeyName: req.apiKey?.name || '',
+          path: req.path,
+          method: req.method,
+          error: rawErrorStr,
+          sanitizedError
+        })
+        .catch((e) => logger.warn('Failed to send webhook notification:', e))
 
       return res.status(statusCode).json({
         error: errorType,
