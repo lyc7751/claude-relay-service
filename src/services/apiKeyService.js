@@ -1540,7 +1540,8 @@ class ApiKeyService {
     model = 'unknown',
     accountId = null,
     accountType = null,
-    timestamp = null
+    timestamp = null,
+    serviceTier = null
   ) {
     try {
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
@@ -1554,7 +1555,8 @@ class ApiKeyService {
           cache_creation_input_tokens: cacheCreateTokens,
           cache_read_input_tokens: cacheReadTokens
         },
-        model
+        model,
+        serviceTier
       )
 
       // 检查是否为 1M 上下文请求
