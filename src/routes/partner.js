@@ -48,6 +48,109 @@ async function getUsageSummary(apiKey) {
 }
 
 // Helper: Get usage details for a key
+function validateRate(value, fieldName) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const rateNum = Number(value)
+  if (Number.isNaN(rateNum) || rateNum <= 0) {
+    return `${fieldName} must be a positive number`
+  }
+
+  if (!/^\d+(\.\d)?$/.test(value.toString())) {
+    return `${fieldName} must be an integer or have at most 1 decimal place`
+  }
+
+  return null
+}
+
+function resolveClaudeRate(primaryRate, fallbackRate = undefined) {
+  return primaryRate !== undefined && primaryRate !== null && primaryRate !== ''
+    ? primaryRate
+    : fallbackRate
+}
+
+async function resolveClaudeBindingFields(claudeAccountId) {
+  const isClaudeGroupBinding = claudeAccountId.startsWith('group:')
+
+  if (isClaudeGroupBinding) {
+    const groupId = claudeAccountId.substring('group:'.length)
+    const group = await accountGroupService.getGroup(groupId)
+
+    if (!group || group.platform !== 'claude') {
+      throw new Error('Claude account group not found or invalid')
+    }
+
+    return {
+      claudeAccountId,
+      claudeConsoleAccountId: null
+    }
+  }
+
+  const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
+  const account = await claudeConsoleAccountService.getAccount(claudeAccountId)
+
+  if (!account || !account.isActive) {
+    throw new Error('Claude account not found or inactive')
+  }
+
+  return {
+    claudeAccountId: null,
+    claudeConsoleAccountId: claudeAccountId
+  }
+}
+
+async function validateOpenAIBinding(openaiAccountId) {
+  const openaiAccountService = require('../services/account/openaiAccountService')
+
+  if (openaiAccountId.startsWith('group:')) {
+    const groupId = openaiAccountId.substring('group:'.length)
+    const group = await accountGroupService.getGroup(groupId)
+    return !!group && group.platform === 'openai'
+  }
+
+  if (openaiAccountId.startsWith('responses:')) {
+    const accountId = openaiAccountId.substring('responses:'.length)
+    const account = await openaiResponsesAccountService.getAccount(accountId)
+    return !!account && account.isActive === 'true'
+  }
+
+  const account = await openaiAccountService.getAccount(openaiAccountId)
+  return !!account && account.isActive === 'true'
+}
+
+function normalizeServiceRates(serviceRates) {
+  if (!serviceRates) {
+    return {}
+  }
+
+  if (typeof serviceRates === 'string') {
+    try {
+      const parsed = JSON.parse(serviceRates)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  return typeof serviceRates === 'object' && !Array.isArray(serviceRates) ? serviceRates : {}
+}
+
+function buildServiceRates(currentRates = {}, claudeRate, openaiRate) {
+  const serviceRates = { ...normalizeServiceRates(currentRates) }
+
+  if (claudeRate !== undefined && claudeRate !== null && claudeRate !== '') {
+    serviceRates.claude = Number(claudeRate)
+  }
+
+  if (openaiRate !== undefined && openaiRate !== null && openaiRate !== '') {
+    serviceRates.codex = Number(openaiRate)
+  }
+
+  return serviceRates
+}
+
 async function getUsageDetails(apiKey) {
   const client = redis.getClientSafe()
   const keyId = apiKey.id
@@ -492,25 +595,7 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       rate
     } = req.body
 
-    const resolvedClaudeRate =
-      claude_rate !== undefined && claude_rate !== null && claude_rate !== '' ? claude_rate : rate
-
-    const validateRate = (value, fieldName) => {
-      if (value === undefined || value === null || value === '') {
-        return null
-      }
-
-      const rateNum = Number(value)
-      if (Number.isNaN(rateNum) || rateNum <= 0) {
-        return `${fieldName} must be a positive number`
-      }
-
-      if (!/^\d+(\.\d)?$/.test(value.toString())) {
-        return `${fieldName} must be an integer or have at most 1 decimal place`
-      }
-
-      return null
-    }
+    const resolvedClaudeRate = resolveClaudeRate(claude_rate, rate)
 
     // 参数验证
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -574,63 +659,26 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       })
     }
 
-    const isClaudeGroupBinding = targetAccountId.startsWith('group:')
-
-    // 验证 Claude 账户或分组
-    if (isClaudeGroupBinding) {
-      const groupId = targetAccountId.substring('group:'.length)
-      const group = await accountGroupService.getGroup(groupId)
-
-      if (!group || group.platform !== 'claude') {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'Claude account group not found or invalid',
-          data: null
-        })
-      }
-    } else {
-      const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
-      const account = await claudeConsoleAccountService.getAccount(targetAccountId)
-
-      if (!account || !account.isActive) {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'Claude account not found or inactive',
-          data: null
-        })
-      }
+    let claudeBindingFields
+    try {
+      claudeBindingFields = await resolveClaudeBindingFields(targetAccountId)
+    } catch (error) {
+      return res.status(400).json({
+        code: 1001,
+        msg: error.message,
+        data: null
+      })
     }
 
-    const claudeBindingFields = isClaudeGroupBinding
-      ? { claudeAccountId: targetAccountId, claudeConsoleAccountId: null }
-      : { claudeAccountId: null, claudeConsoleAccountId: targetAccountId }
-
-    if (openai_account_id) {
-      const openaiAccountService = require('../services/account/openaiAccountService')
-
-      let isValidOpenAIAccount = false
-
-      if (openai_account_id.startsWith('group:')) {
-        const groupId = openai_account_id.substring('group:'.length)
-        const group = await accountGroupService.getGroup(groupId)
-        isValidOpenAIAccount = !!group && group.platform === 'openai'
-      } else if (openai_account_id.startsWith('responses:')) {
-        const accountId = openai_account_id.substring('responses:'.length)
-        const account = await openaiResponsesAccountService.getAccount(accountId)
-        isValidOpenAIAccount = !!account && account.isActive === 'true'
-      } else {
-        const account = await openaiAccountService.getAccount(openai_account_id)
-        isValidOpenAIAccount = !!account && account.isActive === 'true'
-      }
-
-      if (!isValidOpenAIAccount) {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'OpenAI account not found or inactive',
-          data: null
-        })
-      }
+    if (openai_account_id && !(await validateOpenAIBinding(openai_account_id))) {
+      return res.status(400).json({
+        code: 1001,
+        msg: 'OpenAI account not found or inactive',
+        data: null
+      })
     }
+
+    const createServiceRates = buildServiceRates({}, resolvedClaudeRate, openai_rate)
 
     const permissions = ['claude']
     if (openai_account_id) {
@@ -652,19 +700,8 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       createParams.openaiAccountId = openai_account_id
     }
 
-    const serviceRates = {}
-    if (
-      resolvedClaudeRate !== undefined &&
-      resolvedClaudeRate !== null &&
-      resolvedClaudeRate !== ''
-    ) {
-      serviceRates.claude = Number(resolvedClaudeRate)
-    }
-    if (openai_rate !== undefined && openai_rate !== null && openai_rate !== '') {
-      serviceRates.codex = Number(openai_rate)
-    }
-    if (Object.keys(serviceRates).length > 0) {
-      createParams.serviceRates = serviceRates
+    if (Object.keys(createServiceRates).length > 0) {
+      createParams.serviceRates = createServiceRates
     }
 
     // 调用 apiKeyService 创建 API Key
@@ -695,7 +732,7 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
 // 🔧 批量更新 API Key 配置
 router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
   try {
-    const { configs, claude_account_id } = req.body
+    const { configs, claude_account_id, openai_account_id } = req.body
 
     // 参数验证
     if (!configs || !Array.isArray(configs)) {
@@ -714,18 +751,55 @@ router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
       })
     }
 
-    // 验证 Claude 账户（如果提供）
-    if (claude_account_id) {
-      const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
-      const account = await claudeConsoleAccountService.getAccount(claude_account_id)
-
-      if (!account || !account.isActive) {
+    for (const [index, keyConfig] of configs.entries()) {
+      if (!keyConfig.key_id || typeof keyConfig.key_id !== 'string') {
         return res.status(400).json({
           code: 1001,
-          msg: 'Claude account not found or inactive',
+          msg: `configs[${index}].key_id is required`,
           data: null
         })
       }
+
+      const resolvedClaudeRate = resolveClaudeRate(keyConfig.claude_rate, keyConfig.rate)
+
+      const claudeRateError = validateRate(resolvedClaudeRate, `configs[${index}].claude_rate`)
+      if (claudeRateError) {
+        return res.status(400).json({
+          code: 1001,
+          msg: claudeRateError,
+          data: null
+        })
+      }
+
+      const openaiRateError = validateRate(keyConfig.openai_rate, `configs[${index}].openai_rate`)
+      if (openaiRateError) {
+        return res.status(400).json({
+          code: 1001,
+          msg: openaiRateError,
+          data: null
+        })
+      }
+    }
+
+    let claudeBindingUpdates = null
+    if (claude_account_id) {
+      try {
+        claudeBindingUpdates = await resolveClaudeBindingFields(claude_account_id)
+      } catch (error) {
+        return res.status(400).json({
+          code: 1001,
+          msg: error.message,
+          data: null
+        })
+      }
+    }
+
+    if (openai_account_id && !(await validateOpenAIBinding(openai_account_id))) {
+      return res.status(400).json({
+        code: 1001,
+        msg: 'OpenAI account not found or inactive',
+        data: null
+      })
     }
 
     logger.info(`🔧 Partner updating API Key configs: count=${configs.length}`)
@@ -746,18 +820,35 @@ router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
           continue
         }
 
+        const resolvedClaudeRate = resolveClaudeRate(keyConfig.claude_rate, keyConfig.rate)
+
         // 准备更新数据
         const updates = {}
+        const serviceRates = buildServiceRates(
+          apiKey.serviceRates || {},
+          resolvedClaudeRate,
+          keyConfig.openai_rate
+        )
 
-        // 更新服务倍率 - 只更新 claude 服务的倍率
-        const rate = Number(keyConfig.rate)
-        updates.serviceRates = {
-          claude: rate
+        if (Object.keys(serviceRates).length > 0) {
+          updates.serviceRates = serviceRates
         }
 
-        // 更新绑定账户（如果提供）
-        if (claude_account_id) {
-          updates.claudeConsoleAccountId = claude_account_id
+        if (claudeBindingUpdates) {
+          Object.assign(updates, claudeBindingUpdates)
+        }
+
+        if (openai_account_id) {
+          updates.openaiAccountId = openai_account_id
+        }
+
+        if (claudeBindingUpdates || openai_account_id) {
+          const permissions = new Set(Array.isArray(apiKey.permissions) ? apiKey.permissions : [])
+          permissions.add('claude')
+          if (openai_account_id) {
+            permissions.add('openai')
+          }
+          updates.permissions = Array.from(permissions)
         }
 
         // 使用 apiKeyService 更新
@@ -765,7 +856,7 @@ router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
 
         successCount++
         logger.info(
-          `✅ Updated API Key config: ${keyConfig.key_id}, rate=${keyConfig.rate}${claude_account_id ? `, account=${claude_account_id}` : ''}`
+          `✅ Updated API Key config: ${keyConfig.key_id}, claude_rate=${resolvedClaudeRate ?? '-'}, openai_rate=${keyConfig.openai_rate ?? '-'}${claude_account_id ? `, claude_account=${claude_account_id}` : ''}${openai_account_id ? `, openai_account=${openai_account_id}` : ''}`
         )
       } catch (error) {
         logger.error(`❌ Failed to update API Key ${keyConfig.key_id}:`, error)
