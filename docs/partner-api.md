@@ -32,7 +32,7 @@
 - **接口地址**: `POST /partner/api-key/update-config`
 - **认证方式**: SHA256 签名验证
 - **Content-Type**: `application/json`
-- **功能说明**: 批量更新 API Key 的配置信息，包括服务倍率和绑定的 Claude 账户 ID
+- **功能说明**: 批量更新 API Key 的配置信息，包括 Claude/OpenAI 服务倍率及绑定账户
 
 ## 验签机制
 
@@ -84,19 +84,32 @@ SHA256: abc123...
 {
   "name": "MyApp",
   "totalCostLimit": 100.0,
-  "claude_account_id": "account-uuid-here",
-  "rate": 2.1,
+  "claude_account_id": "group:381cb540-f33e-49d1-8fda-80348f8c456f",
+  "openai_account_id": "responses:openai-responses-account-uuid",
+  "claude_rate": 2.1,
+  "openai_rate": 1.8,
   "sign": "ABC123..."
 }
 ```
 
-| 参数              | 类型   | 必填 | 说明                        |
-| ----------------- | ------ | ---- | --------------------------- |
-| name              | string | 是   | API Key 的名称              |
-| totalCostLimit    | number | 否   | 总费用限制（美元）          |
-| claude_account_id | string | 否   | 绑定的 Claude 账户 ID       |
-| rate              | number | 否   | 服务倍率                    |
-| sign              | string | 是   | SHA256 签名（大写十六进制） |
+| 参数              | 类型   | 必填 | 说明                                                                                              |
+| ----------------- | ------ | ---- | ------------------------------------------------------------------------------------------------- |
+| name              | string | 是   | API Key 的名称                                                                                    |
+| totalCostLimit    | number | 否   | 总费用限制（美元）                                                                                |
+| claude_account_id | string | 否   | 绑定的 Claude 账户 ID；普通 ID 写入 `claudeConsoleAccountId`，`group:` 格式写入 `claudeAccountId` |
+| openai_account_id | string | 否   | 绑定的 OpenAI 账户 ID；支持普通 ID、`group:...`、`responses:...`，内部映射到 `openaiAccountId`    |
+| claude_rate       | number | 否   | Claude 服务倍率，内部映射到 `serviceRates.claude`                                                 |
+| openai_rate       | number | 否   | OpenAI/Codex 服务倍率，内部映射到 `serviceRates.codex`                                            |
+| rate              | number | 否   | 兼容旧参数，等同于 `claude_rate`；若同时提供则 `claude_rate` 优先                                 |
+| sign              | string | 是   | SHA256 签名（大写十六进制）                                                                       |
+
+示例说明：
+
+- `claude_account_id` 示例使用了 `group:` 分组绑定格式；如果传普通账户 ID，则会写入 `claudeConsoleAccountId`
+- `openai_account_id` 示例使用了 `responses:` 前缀；实际也支持普通账户 ID 和 `group:...` 前缀
+- 可参考的典型格式：
+  - `claude_account_id`: `claude-console-account-uuid` / `group:group-uuid`
+  - `openai_account_id`: `openai-account-uuid` / `group:group-uuid` / `responses:openai-responses-account-uuid`
 
 #### 响应格式
 
@@ -138,8 +151,14 @@ SHA256: abc123...
 **说明**
 
 - 标签自动设置为 `uni-agent`
-- Claude 专属账号自动绑定到 `FoxCode` 账户
-- 权限固定为 `claude`，只允许访问 Claude 服务
+- 未传 `claude_account_id` 时，会自动绑定默认 Claude 账户
+- `claude_account_id` 为普通 ID 时写入 `claudeConsoleAccountId`；为 `group:` 格式时写入 `claudeAccountId`
+- `claudeAccountId` 与 `claudeConsoleAccountId` 只会有一个字段有值
+- 传入 `openai_account_id` 时，会额外写入 `openaiAccountId`
+- 默认权限包含 `claude`；传入 `openai_account_id` 时，`permissions` 会额外包含 `openai`
+- 传入 `claude_rate` / `openai_rate` 时，会分别写入 `serviceRates.claude` / `serviceRates.codex`
+- 旧 `rate` 参数仍兼容，但建议迁移到 `claude_rate`
+- 所有新增参数在传入时也必须参与签名计算
 - API Key 创建后自动激活
 
 ---
@@ -369,7 +388,8 @@ SHA256: abc123...
   "configs": [
     {
       "key_id": "xxx-xxx-xxx",
-      "rate": 2.1
+      "claude_rate": 2.1,
+      "openai_rate": 1.8
     },
     {
       "key_id": "yyy-yyy-yyy",
@@ -377,30 +397,52 @@ SHA256: abc123...
     },
     {
       "key_id": "zzz-zzz-zzz",
-      "rate": 3.2
+      "claude_rate": 3.2
     }
   ],
-  "claude_account_id": "account-uuid-here",
+  "claude_account_id": "group:381cb540-f33e-49d1-8fda-80348f8c456f",
+  "openai_account_id": "responses:openai-responses-account-uuid",
   "sign": "ABC123..."
 }
 ```
 
-| 参数              | 类型   | 必填 | 说明                                      |
-| ----------------- | ------ | ---- | ----------------------------------------- |
-| configs           | array  | 是   | 配置数组，每个元素包含 key_id 和 rate     |
-| configs[].key_id  | string | 是   | API Key ID                                |
-| configs[].rate    | number | 是   | 服务倍率                                  |
-| claude_account_id | string | 否   | 绑定的 Claude 账户 ID（所有 key_id 共用） |
-| sign              | string | 是   | SHA256 签名（大写十六进制）               |
+| 参数                  | 类型   | 必填 | 说明                                                                                                    |
+| --------------------- | ------ | ---- | ------------------------------------------------------------------------------------------------------- |
+| configs               | array  | 是   | 配置数组，每个元素至少包含 `key_id`，可按 key 单独传费率配置                                            |
+| configs[].key_id      | string | 是   | API Key ID                                                                                              |
+| configs[].claude_rate | number | 否   | Claude 服务倍率，内部映射到 `serviceRates.claude`                                                       |
+| configs[].openai_rate | number | 否   | OpenAI/Codex 服务倍率，内部映射到 `serviceRates.codex`                                                  |
+| configs[].rate        | number | 否   | 兼容旧参数，等同于 `configs[].claude_rate`；若同时提供则 `configs[].claude_rate` 优先                   |
+| claude_account_id     | string | 否   | 所有 key 共用的 Claude 绑定；普通 ID 写入 `claudeConsoleAccountId`，`group:` 格式写入 `claudeAccountId` |
+| openai_account_id     | string | 否   | 所有 key 共用的 OpenAI 绑定；支持普通 ID、`group:...`、`responses:...`，写入 `openaiAccountId`          |
+| sign                  | string | 是   | SHA256 签名（大写十六进制）                                                                             |
 
 **参数验证规则**
 
 1. `configs`: 必填，必须是数组，长度 1-100
 2. `configs[].key_id`: 必填，必须是有效的 API Key ID
-3. `configs[].rate`: 必填，必须是 2.1、2.7 或 3.2 之一
-4. `claude_account_id`: 可选，如果提供则必须是有效的 Claude 账户 ID
+3. `configs[].claude_rate` / `configs[].openai_rate`: 可选，提供时必须是正数，且最多 1 位小数
+4. `configs[].rate`: 兼容旧参数，语义等同于 `configs[].claude_rate`
+5. `claude_account_id`: 可选，普通 ID 会校验 Claude Console 账户；`group:` 格式会校验 Claude 分组
+6. `openai_account_id`: 可选，支持普通 ID、`group:...`、`responses:...`，会按对应类型校验
 
-#### 响应格式
+示例说明：
+
+- `claude_account_id` 示例使用了 `group:` 分组绑定格式；如果传普通账户 ID，则会写入 `claudeConsoleAccountId`
+- `openai_account_id` 示例使用了 `responses:` 前缀；实际也支持普通账户 ID 和 `group:...` 前缀
+- 每个 `configs[]` 元素可独立设置 `claude_rate` / `openai_rate`
+- 如果提供 `claude_account_id` 或 `openai_account_id`，会批量更新所有目标 API Key 的绑定字段
+- `claudeAccountId` 与 `claudeConsoleAccountId` 只会有一个字段有值
+- 所有新增参数在传入时也必须参与签名计算
+
+**兼容说明**
+
+- 旧的 `configs[].rate` 仍可使用，但建议迁移到 `configs[].claude_rate`
+- 未提供某个服务的费率时，不会覆盖该服务现有的 `serviceRates` 配置
+- 更新 OpenAI 绑定时，会确保权限中包含 `openai`
+- 更新 Claude 绑定时，会确保权限中包含 `claude`
+
+**响应格式**
 
 **成功响应**
 
@@ -473,21 +515,26 @@ SHA256: abc123...
 #### 业务逻辑说明
 
 1. **批量验证**: 先验证所有请求参数的格式和取值范围
-2. **逐个处理**: 遍历 configs 数组，逐个更新 API Key 配置
+2. **逐个处理**: 遍历 `configs` 数组，逐个更新 API Key 配置
 3. **错误隔离**: 某个 API Key 更新失败不影响其他 API Key 的更新
-4. **验证 API Key**: 检查 key_id 对应的 API Key 是否存在且未删除
-5. **验证 Claude 账户**: 如果提供了 claude_account_id，必须验证该账户存在且状态为 active
+4. **验证 API Key**: 检查 `key_id` 对应的 API Key 是否存在且未删除
+5. **验证绑定账户**:
+   - `claude_account_id` 为普通 ID 时验证 Claude Console 账户；为 `group:` 时验证 Claude 分组
+   - `openai_account_id` 按普通 ID / `group:` / `responses:` 前缀分别验证
 6. **更新配置**:
-   - 更新 API Key 的 rateMultiplier 字段
-   - 如果提供了 claude_account_id，更新所有 API Key 的 claudeConsoleAccountId 字段
-7. **返回结果**: 返回处理总数、成功数、失败数和失败详情（包含 key_id 和失败原因）
+   - `configs[].claude_rate`（或兼容旧 `configs[].rate`）更新 `serviceRates.claude`
+   - `configs[].openai_rate` 更新 `serviceRates.codex`
+   - 如果提供 `claude_account_id`，按普通账户或分组格式更新 `claudeConsoleAccountId` / `claudeAccountId`
+   - 如果提供 `openai_account_id`，更新 `openaiAccountId`
+   - 如果更新了绑定字段，会确保 `permissions` 中包含对应服务
+7. **返回结果**: 返回处理总数、成功数、失败数和失败详情（包含 `key_id` 和失败原因）
 
 #### 安全考虑
 
 1. **权限验证**: 通过 SHA256 签名验证请求合法性
 2. **参数验证**: 严格验证所有输入参数的格式和取值范围
 3. **批量限制**: 单次请求最多更新 100 个 API Key
-4. **账户验证**: 确保绑定的 Claude 账户存在且可用
+4. **账户/分组验证**: 确保绑定的账户或分组存在且可用
 5. **错误隔离**: 单个更新失败不影响其他更新操作
 6. **审计日志**: 记录所有配置更新操作，便于追溯
 
@@ -496,6 +543,153 @@ SHA256: abc123...
 ## 使用示例
 
 ### Node.js 示例
+
+#### 示例 1: 查询用量汇总
+
+```javascript
+const crypto = require('crypto')
+const axios = require('axios')
+
+// 配置
+const API_URL = 'http://localhost:3000/partner/api-key/usage'
+const SECRET_KEY = 'your-secret-key' // 与服务端 PARTNER_API_SECRET 一致
+
+// 生成签名（PHP 风格算法）
+function generateSignature(params, secretKey) {
+  // 1. 按 key 排序
+  const sortedKeys = Object.keys(params).sort()
+
+  // 2. 拼接参数
+  let signStr = ''
+  for (const key of sortedKeys) {
+    const value = params[key]
+
+    // 对象或数组使用 JSON.stringify
+    if (typeof value === 'object' && value !== null) {
+      signStr += `${key}=${JSON.stringify(value)}`
+    } else {
+      signStr += `${key}=${value}`
+    }
+    signStr += '&'
+  }
+
+  // 3. 移除末尾的 &
+  signStr = signStr.slice(0, -1)
+
+  // 4. 追加密钥
+  signStr += secretKey
+
+  // 5. SHA256 哈希并转大写
+  return crypto.createHash('sha256').update(signStr).digest('hex').toUpperCase()
+}
+
+// 查询用量
+async function queryUsage(keyIds) {
+  const params = { key_ids: keyIds }
+  const signature = generateSignature(params, SECRET_KEY)
+
+  // 将签名添加到参数中
+  params.sign = signature
+
+  try {
+    const response = await axios.post(API_URL, params, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+
+    console.log('查询成功:', response.data)
+    return response.data
+  } catch (error) {
+    console.error('查询失败:', error.response?.data || error.message)
+    throw error
+  }
+}
+
+// 使用示例
+queryUsage(['key-id-1', 'key-id-2'])
+  .then((data) => {
+    // data.data 是 key-value 形式，key 为 keyId
+    for (const [keyId, info] of Object.entries(data.data)) {
+      console.log(`${keyId}: 总费用=${info.totalCost}, 限制=${info.totalCostLimit}`)
+    }
+  })
+  .catch((err) => console.error(err))
+```
+
+#### 示例 2: 查询用量明细
+
+```javascript
+const crypto = require('crypto')
+const axios = require('axios')
+
+// 配置
+const API_URL = 'http://localhost:3000/partner/api-key/usage-details'
+const SECRET_KEY = 'your-secret-key' // 与服务端 PARTNER_API_SECRET 一致
+
+// 生成签名（与示例1相同）
+function generateSignature(params, secretKey) {
+  const sortedKeys = Object.keys(params).sort()
+  let signStr = ''
+  for (const key of sortedKeys) {
+    const value = params[key]
+    if (typeof value === 'object' && value !== null) {
+      signStr += `${key}=${JSON.stringify(value)}`
+    } else {
+      signStr += `${key}=${value}`
+    }
+    signStr += '&'
+  }
+  signStr = signStr.slice(0, -1)
+  signStr += secretKey
+  return crypto.createHash('sha256').update(signStr).digest('hex').toUpperCase()
+}
+
+// 查询用量明细
+async function queryUsageDetails(keyIds) {
+  const params = { key_ids: keyIds }
+  const signature = generateSignature(params, SECRET_KEY)
+  params.sign = signature
+
+  try {
+    const response = await axios.post(API_URL, params, {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    })
+
+    console.log('查询成功:', response.data)
+    return response.data
+  } catch (error) {
+    console.error('查询失败:', error.response?.data || error.message)
+    throw error
+  }
+}
+
+// 使用示例
+queryUsageDetails(['key-id-1', 'key-id-2'])
+  .then((data) => {
+    const { totalStats, dailyUsage, modelStats } = data.data
+
+    console.log('=== 总计统计 ===')
+    console.log('总请求数:', totalStats.requests)
+    console.log('总Token数:', totalStats.totalTokens)
+    console.log('总费用:', `$${totalStats.cost}`)
+
+    console.log('\n=== 每日用量（最近5天）===')
+    dailyUsage.slice(0, 5).forEach((day) => {
+      console.log(`${day.date}: ${day.requests}次请求, ${day.totalTokens} tokens, $${day.cost}`)
+    })
+
+    console.log('\n=== 模型统计（Top 3）===')
+    modelStats.slice(0, 3).forEach((model) => {
+      console.log(`${model.model}: ${model.requests}次请求, $${model.cost}`)
+    })
+  })
+  .catch((err) => console.error(err))
+```
+
+### Python 示例
 
 #### 示例 1: 查询用量汇总
 

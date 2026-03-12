@@ -3,9 +3,9 @@ const router = express.Router()
 const { authenticatePartner } = require('../middleware/partnerAuth')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
-const CostCalculator = require('../utils/costCalculator')
-const pricingService = require('../services/pricingService')
 const apiKeyService = require('../services/apiKeyService')
+const accountGroupService = require('../services/accountGroupService')
+const openaiResponsesAccountService = require('../services/account/openaiResponsesAccountService')
 const config = require('../../config/config')
 
 // Helper: Find API Key by ID or Name
@@ -48,6 +48,145 @@ async function getUsageSummary(apiKey) {
 }
 
 // Helper: Get usage details for a key
+function validateRate(value, fieldName) {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+
+  const rateNum = Number(value)
+  if (Number.isNaN(rateNum) || rateNum <= 0) {
+    return `${fieldName} must be a positive number`
+  }
+
+  if (!/^\d+(\.\d)?$/.test(value.toString())) {
+    return `${fieldName} must be an integer or have at most 1 decimal place`
+  }
+
+  return null
+}
+
+function resolveClaudeRate(primaryRate, fallbackRate = undefined) {
+  return primaryRate !== undefined && primaryRate !== null && primaryRate !== ''
+    ? primaryRate
+    : fallbackRate
+}
+
+async function resolveClaudeBindingFields(claudeAccountId) {
+  const isClaudeGroupBinding = claudeAccountId.startsWith('group:')
+
+  if (isClaudeGroupBinding) {
+    const groupId = claudeAccountId.substring('group:'.length)
+    const group = await accountGroupService.getGroup(groupId)
+
+    if (!group || group.platform !== 'claude') {
+      throw new Error('Claude account group not found or invalid')
+    }
+
+    return {
+      claudeAccountId,
+      claudeConsoleAccountId: null
+    }
+  }
+
+  const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
+  const account = await claudeConsoleAccountService.getAccount(claudeAccountId)
+
+  if (!account || !account.isActive) {
+    throw new Error('Claude account not found or inactive')
+  }
+
+  return {
+    claudeAccountId: null,
+    claudeConsoleAccountId: claudeAccountId
+  }
+}
+
+async function validateOpenAIBinding(openaiAccountId) {
+  const openaiAccountService = require('../services/account/openaiAccountService')
+
+  if (openaiAccountId.startsWith('group:')) {
+    const groupId = openaiAccountId.substring('group:'.length)
+    const group = await accountGroupService.getGroup(groupId)
+    return !!group && group.platform === 'openai'
+  }
+
+  if (openaiAccountId.startsWith('responses:')) {
+    const accountId = openaiAccountId.substring('responses:'.length)
+    const account = await openaiResponsesAccountService.getAccount(accountId)
+    return !!account && account.isActive === 'true'
+  }
+
+  const account = await openaiAccountService.getAccount(openaiAccountId)
+  return !!account && account.isActive === 'true'
+}
+
+function normalizePermissionList(permissions) {
+  if (!permissions) {
+    return []
+  }
+
+  if (Array.isArray(permissions)) {
+    return permissions
+  }
+
+  if (typeof permissions === 'string') {
+    if (permissions.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(permissions)
+        return Array.isArray(parsed) ? parsed : []
+      } catch {
+        return []
+      }
+    }
+
+    if (permissions === 'all') {
+      return []
+    }
+
+    if (permissions.includes(',')) {
+      return permissions
+        .split(',')
+        .map((permission) => permission.trim())
+        .filter(Boolean)
+    }
+
+    return [permissions]
+  }
+
+  return []
+}
+
+function normalizeServiceRates(serviceRates) {
+  if (!serviceRates) {
+    return {}
+  }
+
+  if (typeof serviceRates === 'string') {
+    try {
+      const parsed = JSON.parse(serviceRates)
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch {
+      return {}
+    }
+  }
+
+  return typeof serviceRates === 'object' && !Array.isArray(serviceRates) ? serviceRates : {}
+}
+
+function buildServiceRates(currentRates = {}, claudeRate, openaiRate) {
+  const serviceRates = { ...normalizeServiceRates(currentRates) }
+
+  if (claudeRate !== undefined && claudeRate !== null && claudeRate !== '') {
+    serviceRates.claude = Number(claudeRate)
+  }
+
+  if (openaiRate !== undefined && openaiRate !== null && openaiRate !== '') {
+    serviceRates.codex = Number(openaiRate)
+  }
+
+  return serviceRates
+}
+
 async function getUsageDetails(apiKey) {
   const client = redis.getClientSafe()
   const keyId = apiKey.id
@@ -110,7 +249,9 @@ async function getUsageDetails(apiKey) {
   })
 
   results.forEach(([err, data], index) => {
-    if (err || !data) return
+    if (err || !data) {
+      return
+    }
     const query = queryMap[index]
 
     if (query.type === 'daily') {
@@ -447,7 +588,7 @@ router.post('/api-key/usage-details', authenticatePartner, async (req, res) => {
           cacheReadTokens: day.cacheReadTokens,
           totalTokens: day.totalTokens,
           cost: parseFloat(day.cost.toFixed(6)),
-          models: models
+          models
         }
       })
 
@@ -480,7 +621,17 @@ router.post('/api-key/usage-details', authenticatePartner, async (req, res) => {
 // 🔑 创建 API Key
 router.post('/api-key/create', authenticatePartner, async (req, res) => {
   try {
-    const { name, totalCostLimit, claude_account_id, rate } = req.body
+    const {
+      name,
+      totalCostLimit,
+      claude_account_id,
+      openai_account_id,
+      claude_rate,
+      openai_rate,
+      rate
+    } = req.body
+
+    const resolvedClaudeRate = resolveClaudeRate(claude_rate, rate)
 
     // 参数验证
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -512,24 +663,22 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       })
     }
 
-    // 验证 rate 参数（如果提供）
-    if (rate !== undefined && rate !== null && rate !== '') {
-      const rateNum = Number(rate)
-      if (Number.isNaN(rateNum) || rateNum <= 0) {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'rate must be a positive number',
-          data: null
-        })
-      }
-      // 验证是否为 1 位小数
-      if (!/^\d+\.\d$/.test(rate.toString())) {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'rate must have exactly 1 decimal place',
-          data: null
-        })
-      }
+    const claudeRateError = validateRate(resolvedClaudeRate, 'claude_rate')
+    if (claudeRateError) {
+      return res.status(400).json({
+        code: 1001,
+        msg: claudeRateError,
+        data: null
+      })
+    }
+
+    const openaiRateError = validateRate(openai_rate, 'openai_rate')
+    if (openaiRateError) {
+      return res.status(400).json({
+        code: 1001,
+        msg: openaiRateError,
+        data: null
+      })
     }
 
     logger.info(`🔑 Partner creating API Key: name=${name}`)
@@ -546,18 +695,30 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       })
     }
 
-    // 验证 Claude 账户（如果提供了自定义账户）
-    if (claude_account_id) {
-      const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
-      const account = await claudeConsoleAccountService.getAccount(claude_account_id)
+    let claudeBindingFields
+    try {
+      claudeBindingFields = await resolveClaudeBindingFields(targetAccountId)
+    } catch (error) {
+      return res.status(400).json({
+        code: 1001,
+        msg: error.message,
+        data: null
+      })
+    }
 
-      if (!account || !account.isActive) {
-        return res.status(400).json({
-          code: 1001,
-          msg: 'Claude account not found or inactive',
-          data: null
-        })
-      }
+    if (openai_account_id && !(await validateOpenAIBinding(openai_account_id))) {
+      return res.status(400).json({
+        code: 1001,
+        msg: 'OpenAI account not found or inactive',
+        data: null
+      })
+    }
+
+    const createServiceRates = buildServiceRates({}, resolvedClaudeRate, openai_rate)
+
+    const permissions = ['claude']
+    if (openai_account_id) {
+      permissions.push('openai')
     }
 
     // 准备创建参数
@@ -566,20 +727,20 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
       description: 'Created by partner API',
       tags: ['uni-agent'],
       totalCostLimit: totalCostLimit ? Number(totalCostLimit) : 0,
-      claudeConsoleAccountId: targetAccountId,
-      permissions: ['claude'], // 只允许访问 Claude 服务
+      ...claudeBindingFields,
+      permissions,
       isActive: true
     }
 
-    // 如果提供了 rate，设置服务倍率
-    if (rate !== undefined && rate !== null && rate !== '') {
-      createParams.serviceRates = {
-        claude: Number(rate)
-      }
+    if (openai_account_id) {
+      createParams.openaiAccountId = openai_account_id
+    }
+
+    if (Object.keys(createServiceRates).length > 0) {
+      createParams.serviceRates = createServiceRates
     }
 
     // 调用 apiKeyService 创建 API Key
-    const apiKeyService = require('../services/apiKeyService')
     const newKey = await apiKeyService.generateApiKey(createParams)
 
     logger.success(`✅ Partner created API Key: ${newKey.id} (${name})`)
@@ -607,7 +768,7 @@ router.post('/api-key/create', authenticatePartner, async (req, res) => {
 // 🔧 批量更新 API Key 配置
 router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
   try {
-    const { configs, claude_account_id } = req.body
+    const { configs, claude_account_id, openai_account_id } = req.body
 
     // 参数验证
     if (!configs || !Array.isArray(configs)) {
@@ -626,18 +787,55 @@ router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
       })
     }
 
-    // 验证 Claude 账户（如果提供）
-    if (claude_account_id) {
-      const claudeConsoleAccountService = require('../services/account/claudeConsoleAccountService')
-      const account = await claudeConsoleAccountService.getAccount(claude_account_id)
-
-      if (!account || !account.isActive) {
+    for (const [index, keyConfig] of configs.entries()) {
+      if (!keyConfig.key_id || typeof keyConfig.key_id !== 'string') {
         return res.status(400).json({
           code: 1001,
-          msg: 'Claude account not found or inactive',
+          msg: `configs[${index}].key_id is required`,
           data: null
         })
       }
+
+      const resolvedClaudeRate = resolveClaudeRate(keyConfig.claude_rate, keyConfig.rate)
+
+      const claudeRateError = validateRate(resolvedClaudeRate, `configs[${index}].claude_rate`)
+      if (claudeRateError) {
+        return res.status(400).json({
+          code: 1001,
+          msg: claudeRateError,
+          data: null
+        })
+      }
+
+      const openaiRateError = validateRate(keyConfig.openai_rate, `configs[${index}].openai_rate`)
+      if (openaiRateError) {
+        return res.status(400).json({
+          code: 1001,
+          msg: openaiRateError,
+          data: null
+        })
+      }
+    }
+
+    let claudeBindingUpdates = null
+    if (claude_account_id) {
+      try {
+        claudeBindingUpdates = await resolveClaudeBindingFields(claude_account_id)
+      } catch (error) {
+        return res.status(400).json({
+          code: 1001,
+          msg: error.message,
+          data: null
+        })
+      }
+    }
+
+    if (openai_account_id && !(await validateOpenAIBinding(openai_account_id))) {
+      return res.status(400).json({
+        code: 1001,
+        msg: 'OpenAI account not found or inactive',
+        data: null
+      })
     }
 
     logger.info(`🔧 Partner updating API Key configs: count=${configs.length}`)
@@ -646,43 +844,60 @@ router.post('/api-key/update-config', authenticatePartner, async (req, res) => {
     let successCount = 0
 
     // 逐个更新配置
-    for (const config of configs) {
+    for (const keyConfig of configs) {
       try {
-        const apiKey = await findApiKey(config.key_id, null)
+        const apiKey = await findApiKey(keyConfig.key_id, null)
 
         if (!apiKey) {
           failed.push({
-            key_id: config.key_id,
+            key_id: keyConfig.key_id,
             reason: 'API Key not found'
           })
           continue
         }
 
+        const resolvedClaudeRate = resolveClaudeRate(keyConfig.claude_rate, keyConfig.rate)
+
         // 准备更新数据
         const updates = {}
+        const serviceRates = buildServiceRates(
+          apiKey.serviceRates || {},
+          resolvedClaudeRate,
+          keyConfig.openai_rate
+        )
 
-        // 更新服务倍率 - 只更新 claude 服务的倍率
-        const rate = Number(config.rate)
-        updates.serviceRates = {
-          claude: rate
+        if (Object.keys(serviceRates).length > 0) {
+          updates.serviceRates = serviceRates
         }
 
-        // 更新绑定账户（如果提供）
-        if (claude_account_id) {
-          updates.claudeConsoleAccountId = claude_account_id
+        if (claudeBindingUpdates) {
+          Object.assign(updates, claudeBindingUpdates)
+        }
+
+        if (openai_account_id) {
+          updates.openaiAccountId = openai_account_id
+        }
+
+        if (claudeBindingUpdates || openai_account_id) {
+          const permissions = new Set(normalizePermissionList(apiKey.permissions))
+          permissions.add('claude')
+          if (openai_account_id) {
+            permissions.add('openai')
+          }
+          updates.permissions = Array.from(permissions)
         }
 
         // 使用 apiKeyService 更新
-        await apiKeyService.updateApiKey(config.key_id, updates)
+        await apiKeyService.updateApiKey(keyConfig.key_id, updates)
 
         successCount++
         logger.info(
-          `✅ Updated API Key config: ${config.key_id}, rate=${config.rate}${claude_account_id ? `, account=${claude_account_id}` : ''}`
+          `✅ Updated API Key config: ${keyConfig.key_id}, claude_rate=${resolvedClaudeRate ?? '-'}, openai_rate=${keyConfig.openai_rate ?? '-'}${claude_account_id ? `, claude_account=${claude_account_id}` : ''}${openai_account_id ? `, openai_account=${openai_account_id}` : ''}`
         )
       } catch (error) {
-        logger.error(`❌ Failed to update API Key ${config.key_id}:`, error)
+        logger.error(`❌ Failed to update API Key ${keyConfig.key_id}:`, error)
         failed.push({
-          key_id: config.key_id,
+          key_id: keyConfig.key_id,
           reason: error.message || 'Unknown error'
         })
       }

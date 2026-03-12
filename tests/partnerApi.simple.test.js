@@ -102,7 +102,8 @@ async function testCreateApiKey() {
   await test('测试 1: 创建 API Key', async () => {
     const params = {
       name: `TestApp_${Date.now()}`,
-      totalCostLimit: 100.0
+      totalCostLimit: 100.0,
+      claude_rate: 2.1
     }
     const signature = generateSignature(params)
 
@@ -129,9 +130,7 @@ async function testCreateApiKey() {
       console.log(`  创建的 API Key: ${createdApiKey}`)
     } catch (error) {
       if (error.response?.data?.code === 1002) {
-        console.log(
-          `  ⚠️  跳过：缺少 FoxCode 账户（${error.response.data.msg}）`
-        )
+        console.log(`  ⚠️  跳过：缺少 FoxCode 账户（${error.response.data.msg}）`)
         console.log(`  提示：请通过 Web 管理界面添加名为 "FoxCode" 的 Claude 账户`)
         return
       }
@@ -275,10 +274,7 @@ async function testQueryUsageNotFound() {
 
     assert(response.status === 200, 'HTTP 状态码应为 200')
     assert(response.data.code === 0, '响应 code 应为 0')
-    assert(
-      Object.keys(response.data.data).length === 0,
-      '不存在的 key 应返回空对象'
-    )
+    assert(Object.keys(response.data.data).length === 0, '不存在的 key 应返回空对象')
   })
 }
 
@@ -346,9 +342,7 @@ async function testQueryUsageDetails() {
     if (dailyUsage.length > 0) {
       console.log(`\n  === 每日用量（最近3天）===`)
       dailyUsage.slice(0, 3).forEach((day) => {
-        console.log(
-          `  ${day.date}: ${day.requests}次请求, ${day.totalTokens} tokens, $${day.cost}`
-        )
+        console.log(`  ${day.date}: ${day.requests}次请求, ${day.totalTokens} tokens, $${day.cost}`)
       })
     }
 
@@ -471,4 +465,3 @@ module.exports = {
   assert,
   test
 }
-
