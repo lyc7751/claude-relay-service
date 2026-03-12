@@ -22,7 +22,7 @@ const ERROR_CODES = {
   E013: { message: 'Invalid API key', status: 401 },
   E014: { message: 'Quota exceeded', status: 429 },
   E015: { message: 'Internal server error', status: 500 },
-  E016: { message: 'Context Limit Exceeded', status: 400 }
+  E016: { message: 'Prompt is too long', status: 413 }
 }
 
 // 错误特征匹配规则（按优先级排序）
