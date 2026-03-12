@@ -1442,10 +1442,10 @@ async function handleMessagesRequest(req, res) {
       timestamp: new Date().toISOString()
     }
 
-    // 检查是否需要发送通知（No available accounts 错误每个 apiKeyName 每日只通知一次）
+    // 检查是否需要发送通知（No available 错误每个 apiKeyName 每日只通知一次）
     const shouldNotify = (() => {
       const message = handledError.message || ''
-      if (!message.includes('No available accounts')) {
+      if (!message.includes('No available')) {
         return true
       }
 

@@ -177,6 +177,34 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       }
     }
 
+    // 减去被排除的 key 的统计数据
+    const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+    if (excludedKeyIds.length > 0) {
+      const excludedKeys = excludedKeyIds.map((keyId) => `usage:${keyId}`)
+      const excludedResults = await redis.batchHgetallChunked(excludedKeys)
+      for (const data of excludedResults) {
+        if (data) {
+          totalRequestsUsed -= parseInt(data.totalRequests || data.requests) || 0
+          totalInputTokensUsed -= parseInt(data.totalInputTokens || data.inputTokens) || 0
+          totalOutputTokensUsed -= parseInt(data.totalOutputTokens || data.outputTokens) || 0
+          totalCacheCreateTokensUsed -=
+            parseInt(data.totalCacheCreateTokens || data.cacheCreateTokens) || 0
+          totalCacheReadTokensUsed -=
+            parseInt(data.totalCacheReadTokens || data.cacheReadTokens) || 0
+          totalAllTokensUsed -= parseInt(data.totalAllTokens || data.allTokens) || 0
+          totalTokensUsed -= parseInt(data.totalAllTokens || data.allTokens) || 0
+        }
+      }
+      // 防止出现负数
+      totalRequestsUsed = Math.max(0, totalRequestsUsed)
+      totalInputTokensUsed = Math.max(0, totalInputTokensUsed)
+      totalOutputTokensUsed = Math.max(0, totalOutputTokensUsed)
+      totalCacheCreateTokensUsed = Math.max(0, totalCacheCreateTokensUsed)
+      totalCacheReadTokensUsed = Math.max(0, totalCacheReadTokensUsed)
+      totalAllTokensUsed = Math.max(0, totalAllTokensUsed)
+      totalTokensUsed = Math.max(0, totalTokensUsed)
+    }
+
     // 各平台账户统计（单次遍历）
     const claudeStats = countAccountStats(claudeAccounts)
     const claudeConsoleStats = countAccountStats(claudeConsoleAccounts)
@@ -499,6 +527,46 @@ router.get('/model-stats', authenticateAdmin, async (req, res) => {
         stats.ephemeral1hTokens += parseInt(data.ephemeral1hTokens) || 0
 
         modelStatsMap.set(normalizedModel, stats)
+      }
+    }
+
+    // 减去被排除的 key 的统计数据
+    const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+    if (excludedKeyIds.length > 0) {
+      logger.info(`📊 Excluding keyIds from model stats: ${excludedKeyIds.join(', ')}`)
+
+      for (const [model, stats] of modelStatsMap) {
+        for (const keyId of excludedKeyIds) {
+          // 对每个日期模式，获取该 keyId 的该模型数据
+          for (const { dateStr, pattern } of datePatterns) {
+            const isMonthly = pattern.includes(':monthly:')
+            const keyModelKey = isMonthly
+              ? `usage:${keyId}:model:monthly:${model}:${dateStr}`
+              : `usage:${keyId}:model:daily:${model}:${dateStr}`
+
+            const data = await redis.client.hgetall(keyModelKey)
+            if (data && Object.keys(data).length > 0) {
+              stats.requests -= parseInt(data.requests) || 0
+              stats.inputTokens -= parseInt(data.inputTokens) || 0
+              stats.outputTokens -= parseInt(data.outputTokens) || 0
+              stats.cacheCreateTokens -= parseInt(data.cacheCreateTokens) || 0
+              stats.cacheReadTokens -= parseInt(data.cacheReadTokens) || 0
+              stats.allTokens -= parseInt(data.allTokens) || 0
+              stats.ephemeral5mTokens -= parseInt(data.ephemeral5mTokens) || 0
+              stats.ephemeral1hTokens -= parseInt(data.ephemeral1hTokens) || 0
+            }
+          }
+        }
+
+        // 防止负数
+        stats.requests = Math.max(0, stats.requests)
+        stats.inputTokens = Math.max(0, stats.inputTokens)
+        stats.outputTokens = Math.max(0, stats.outputTokens)
+        stats.cacheCreateTokens = Math.max(0, stats.cacheCreateTokens)
+        stats.cacheReadTokens = Math.max(0, stats.cacheReadTokens)
+        stats.allTokens = Math.max(0, stats.allTokens)
+        stats.ephemeral5mTokens = Math.max(0, stats.ephemeral5mTokens)
+        stats.ephemeral1hTokens = Math.max(0, stats.ephemeral1hTokens)
       }
     }
 

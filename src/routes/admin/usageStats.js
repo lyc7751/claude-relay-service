@@ -14,6 +14,7 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const CostCalculator = require('../../utils/costCalculator')
 const pricingService = require('../../services/pricingService')
+const config = require('../../../config/config')
 
 const router = express.Router()
 
@@ -630,6 +631,9 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
       }
 
       // 处理每个小时的数据
+      const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+      const excludedSet = new Set(excludedKeyIds)
+
       for (const hourInfo of hourInfos) {
         const modelKeys = modelKeysByHour.get(hourInfo.hourKey) || []
         const usageKeys = usageKeysByHour.get(hourInfo.hourKey) || []
@@ -685,11 +689,50 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           hourCost += modelCostResult.costs.total
         }
 
-        // 如果没有模型级别的数据，尝试API Key级别的数据
+        // 模型级别数据是全局聚合的，需要减去被排除 key 的 per-key 数据
+        if (modelKeys.length > 0 && excludedSet.size > 0) {
+          for (const usageKey of usageKeys) {
+            const keyIdMatch = usageKey.match(/usage:hourly:(.+?):\d{4}-\d{2}-\d{2}:\d{2}/)
+            if (keyIdMatch && excludedSet.has(keyIdMatch[1])) {
+              const data = usageDataMap.get(usageKey)
+              if (data) {
+                hourInputTokens -= parseInt(data.inputTokens) || 0
+                hourOutputTokens -= parseInt(data.outputTokens) || 0
+                hourRequests -= parseInt(data.requests) || 0
+                hourCacheCreateTokens -= parseInt(data.cacheCreateTokens) || 0
+                hourCacheReadTokens -= parseInt(data.cacheReadTokens) || 0
+              }
+            }
+          }
+          // 减去被排除 key 的 cost
+          if (excludedKeyIds.length > 0) {
+            const _client = redis.getClientSafe()
+            const costKeys = excludedKeyIds.map(
+              (keyId) => `usage:cost:hourly:${keyId}:${hourInfo.hourKey}`
+            )
+            const costs = await Promise.all(costKeys.map((k) => _client.get(k)))
+            const excludedCost = costs.reduce((sum, cost) => sum + (parseFloat(cost) || 0), 0)
+            hourCost -= excludedCost
+          }
+          // 防止负数
+          hourInputTokens = Math.max(0, hourInputTokens)
+          hourOutputTokens = Math.max(0, hourOutputTokens)
+          hourRequests = Math.max(0, hourRequests)
+          hourCacheCreateTokens = Math.max(0, hourCacheCreateTokens)
+          hourCacheReadTokens = Math.max(0, hourCacheReadTokens)
+          hourCost = Math.max(0, hourCost)
+        }
+
+        // 如果没有模型级别的数据，尝试API Key级别的数据（直接过滤排除的 key）
         if (modelKeys.length === 0) {
           let hourEph5m = 0
           let hourEph1h = 0
           for (const key of usageKeys) {
+            // 直接跳过被排除的 keyId
+            const keyIdMatch = key.match(/usage:hourly:(.+?):\d{4}-\d{2}-\d{2}:\d{2}/)
+            if (keyIdMatch && excludedSet.has(keyIdMatch[1])) {
+              continue
+            }
             const data = usageDataMap.get(key)
             if (data) {
               hourInputTokens += parseInt(data.inputTokens) || 0
@@ -797,6 +840,9 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
       }
 
       // 处理每天的数据
+      const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+      const excludedSet = new Set(excludedKeyIds)
+
       for (const dayInfo of dayInfos) {
         const modelKeys = modelKeysByDate.get(dayInfo.dateStr) || []
         const usageKeys = usageKeysByDate.get(dayInfo.dateStr) || []
@@ -854,11 +900,50 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           dayCost += modelCostResult.costs.total
         }
 
-        // 如果没有模型级别的数据，回退到原始方法
+        // 模型级别数据是全局聚合的，需要减去被排除 key 的 per-key 数据
+        if (modelKeys.length > 0 && excludedSet.size > 0) {
+          for (const usageKey of usageKeys) {
+            const keyIdMatch = usageKey.match(/usage:daily:(.+?):\d{4}-\d{2}-\d{2}/)
+            if (keyIdMatch && excludedSet.has(keyIdMatch[1])) {
+              const data = usageDataMap.get(usageKey)
+              if (data) {
+                dayInputTokens -= parseInt(data.inputTokens) || 0
+                dayOutputTokens -= parseInt(data.outputTokens) || 0
+                dayRequests -= parseInt(data.requests) || 0
+                dayCacheCreateTokens -= parseInt(data.cacheCreateTokens) || 0
+                dayCacheReadTokens -= parseInt(data.cacheReadTokens) || 0
+              }
+            }
+          }
+          // 减去被排除 key 的 cost
+          if (excludedKeyIds.length > 0) {
+            const _client = redis.getClientSafe()
+            const costKeys = excludedKeyIds.map(
+              (keyId) => `usage:cost:daily:${keyId}:${dayInfo.dateStr}`
+            )
+            const costs = await Promise.all(costKeys.map((k) => _client.get(k)))
+            const excludedCost = costs.reduce((sum, cost) => sum + (parseFloat(cost) || 0), 0)
+            dayCost -= excludedCost
+          }
+          // 防止负数
+          dayInputTokens = Math.max(0, dayInputTokens)
+          dayOutputTokens = Math.max(0, dayOutputTokens)
+          dayRequests = Math.max(0, dayRequests)
+          dayCacheCreateTokens = Math.max(0, dayCacheCreateTokens)
+          dayCacheReadTokens = Math.max(0, dayCacheReadTokens)
+          dayCost = Math.max(0, dayCost)
+        }
+
+        // 如果没有模型级别的数据，回退到原始方法（直接过滤排除的 key）
         if (modelKeys.length === 0 && usageKeys.length > 0) {
           let dayEph5m = 0
           let dayEph1h = 0
           for (const key of usageKeys) {
+            // 直接跳过被排除的 keyId
+            const keyIdMatch = key.match(/usage:daily:(.+?):\d{4}-\d{2}-\d{2}/)
+            if (keyIdMatch && excludedSet.has(keyIdMatch[1])) {
+              continue
+            }
             const data = usageDataMap.get(key)
             if (data) {
               dayInputTokens += parseInt(data.inputTokens) || 0
@@ -1812,6 +1897,13 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
     const apiKeyBasicData = await redis.batchGetApiKeys(apiKeyIds)
     let filteredKeys = apiKeyBasicData.filter((key) => !key.isDeleted)
 
+    // 过滤被排除的 keyId
+    const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+    if (excludedKeyIds.length > 0) {
+      const excludedSet = new Set(excludedKeyIds)
+      filteredKeys = filteredKeys.filter((key) => !excludedSet.has(key.id))
+    }
+
     // 按标签筛选
     if (tag) {
       filteredKeys = filteredKeys.filter((key) => Array.isArray(key.tags) && key.tags.includes(tag))
@@ -2343,6 +2435,52 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
 
     const modelCosts = {}
 
+    // 辅助函数：减去被排除的 keyId 的成本
+    const subtractExcludedKeyCosts = async (totalCosts, period) => {
+      const excludedKeyIds = config.stats?.excludeKeyIdsFromTodayStats || []
+
+      logger.info(`💰 Excluded keyIds: ${excludedKeyIds.join(', ')} for period: ${period}`)
+
+      if (excludedKeyIds.length === 0) {
+        return
+      }
+
+      let excludedTotalCost = 0
+      const _client = redis.getClientSafe()
+
+      if (period === 'today') {
+        const today = redis.getDateStringInTimezone()
+        const costKeys = excludedKeyIds.map((keyId) => `usage:cost:daily:${keyId}:${today}`)
+        const costs = await Promise.all(costKeys.map((key) => _client.get(key)))
+        excludedTotalCost = costs.reduce((sum, cost) => sum + (parseFloat(cost) || 0), 0)
+        logger.info(`💰 Excluded cost (today): ${excludedTotalCost}, keys: ${costKeys.join(', ')}`)
+      } else if (period === 'monthly') {
+        const tzDate = redis.getDateInTimezone()
+        const currentMonth = `${tzDate.getUTCFullYear()}-${String(tzDate.getUTCMonth() + 1).padStart(2, '0')}`
+        const costKeys = excludedKeyIds.map(
+          (keyId) => `usage:cost:monthly:${keyId}:${currentMonth}`
+        )
+        const costs = await Promise.all(costKeys.map((key) => _client.get(key)))
+        excludedTotalCost = costs.reduce((sum, cost) => sum + (parseFloat(cost) || 0), 0)
+        logger.info(
+          `💰 Excluded cost (monthly): ${excludedTotalCost}, keys: ${costKeys.join(', ')}`
+        )
+      } else {
+        // 7days 或 all：使用总成本
+        const costKeys = excludedKeyIds.map((keyId) => `usage:cost:total:${keyId}`)
+        const costs = await Promise.all(costKeys.map((key) => _client.get(key)))
+        excludedTotalCost = costs.reduce((sum, cost) => sum + (parseFloat(cost) || 0), 0)
+        logger.info(
+          `💰 Excluded cost (${period}): ${excludedTotalCost}, keys: ${costKeys.join(', ')}`
+        )
+      }
+
+      logger.info(
+        `💰 Total cost before: ${totalCosts.totalCost}, after: ${Math.max(0, totalCosts.totalCost - excludedTotalCost)}`
+      )
+      totalCosts.totalCost = Math.max(0, totalCosts.totalCost - excludedTotalCost)
+    }
+
     // 按模型统计费用
     const _client = redis.getClientSafe()
     const today = redis.getDateStringInTimezone()
@@ -2460,6 +2598,9 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
           usingDynamicPricing: costResult.usingDynamicPricing
         }
       }
+
+      // 减去被排除的 keyId 的成本
+      await subtractExcludedKeyCosts(totalCosts, period)
 
       // 返回7天统计结果
       return res.json({
@@ -2611,6 +2752,9 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         }
       }
 
+      // 减去被排除的 keyId 的成本
+      await subtractExcludedKeyCosts(totalCosts, period)
+
       return res.json({
         success: true,
         data: {
@@ -2701,6 +2845,9 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         usingDynamicPricing: costResult.usingDynamicPricing
       }
     }
+
+    // 减去被排除的 keyId 的成本
+    await subtractExcludedKeyCosts(totalCosts, period)
 
     return res.json({
       success: true,

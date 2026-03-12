@@ -2729,11 +2729,20 @@ class RedisClient {
       let dailyKeys = []
       const indexKey = `usage:daily:index:${today}`
       const indexMembers = await this.client.smembers(indexKey)
+      const excludedKeyIds = new Set(config.stats?.excludeKeyIdsFromTodayStats || [])
       if (indexMembers && indexMembers.length > 0) {
-        dailyKeys = indexMembers.map((keyId) => `usage:daily:${keyId}:${today}`)
+        dailyKeys = indexMembers
+          .filter((keyId) => !excludedKeyIds.has(keyId))
+          .map((keyId) => `usage:daily:${keyId}:${today}`)
       } else {
         // 回退到 SCAN（兼容历史数据）
         dailyKeys = await this.scanKeys(`usage:daily:*:${today}`)
+        if (excludedKeyIds.size > 0) {
+          dailyKeys = dailyKeys.filter((key) => {
+            const match = key.match(/^usage:daily:(.+):\d{4}-\d{2}-\d{2}$/)
+            return !match || !excludedKeyIds.has(match[1])
+          })
+        }
       }
 
       let totalRequestsToday = 0
