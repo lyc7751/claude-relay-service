@@ -1200,7 +1200,7 @@ const authenticateApiKey = async (req, res, next) => {
         return res.status(402).json({
           error: {
             type: 'insufficient_quota',
-            message: `已达到每日费用限制 ($${dailyCostLimit})`,
+            message: `当前 uni-agent 资源包额度已用尽，请购买新资源包，如已购买，请重启 HBuilderX 使新资源包生效。`,
             code: 'daily_cost_limit_exceeded'
           },
           currentCost: dailyCost,
@@ -1233,7 +1233,7 @@ const authenticateApiKey = async (req, res, next) => {
         return res.status(402).json({
           error: {
             type: 'insufficient_quota',
-            message: `已达到总费用限制 ($${totalCostLimit})`,
+            message: `当前 uni-agent 资源包额度已用尽，请购买新资源包，如已购买，请重启 HBuilderX 使新资源包生效。`,
             code: 'total_cost_limit_exceeded'
           },
           currentCost: totalCost,
@@ -1275,7 +1275,7 @@ const authenticateApiKey = async (req, res, next) => {
           return res.status(402).json({
             error: {
               type: 'insufficient_quota',
-              message: `已达到 Claude 模型周费用限制 ($${weeklyOpusCostLimit})`,
+              message: `当前 uni-agent 资源包额度已用尽，请购买新资源包，如已购买，请重启 HBuilderX 使新资源包生效。`,
               code: 'weekly_opus_cost_limit_exceeded'
             },
             currentCost: weeklyOpusCost,
