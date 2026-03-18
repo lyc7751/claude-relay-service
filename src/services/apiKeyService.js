@@ -1537,7 +1537,8 @@ class ApiKeyService {
     accountId = null,
     accountType = null,
     timestamp = null,
-    serviceTier = null
+    serviceTier = null,
+    extra = {}
   ) {
     try {
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
@@ -1652,7 +1653,8 @@ class ApiKeyService {
         totalTokens,
         cost: Number(ratedCost.toFixed(6)),
         realCost: Number(realCost.toFixed(6)),
-        realCostBreakdown: costInfo && costInfo.costs ? costInfo.costs : undefined
+        realCostBreakdown: costInfo && costInfo.costs ? costInfo.costs : undefined,
+        ...extra
       })
 
       const logParts = [`Model: ${model}`, `Input: ${inputTokens}`, `Output: ${outputTokens}`]
@@ -1711,7 +1713,8 @@ class ApiKeyService {
     usageObject,
     model = 'unknown',
     accountId = null,
-    accountType = null
+    accountType = null,
+    extra = {}
   ) {
     try {
       // 提取 token 数量
@@ -1906,7 +1909,8 @@ class ApiKeyService {
           ephemeral5m: costInfo.ephemeral5mCost || 0,
           ephemeral1h: costInfo.ephemeral1hCost || 0
         },
-        isLongContext: costInfo.isLongContextRequest || false
+        isLongContext: costInfo.isLongContextRequest || false,
+        ...extra
       }
 
       await redis.addUsageRecord(keyId, usageRecord)
@@ -2543,7 +2547,8 @@ class ApiKeyService {
             modelMap[query.model].outputTokens += outputTokens
             modelMap[query.model].cacheCreateTokens += cacheCreateTokens
             modelMap[query.model].cacheReadTokens += cacheReadTokens
-            modelMap[query.model].totalTokens += inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
+            modelMap[query.model].totalTokens +=
+              inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
             modelMap[query.model].cost += cost
 
             // 如果有模型过滤，Daily Stats 必须从这里累加

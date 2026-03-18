@@ -10,6 +10,7 @@ const crypto = require('crypto')
 const LRUCache = require('../../utils/lruCache')
 const upstreamErrorHelper = require('../../utils/upstreamErrorHelper')
 const webhookService = require('../webhookService')
+const { extractUserInput, classifyProjectType } = require('../../utils/userInputExtractor')
 
 // lastUsedAt 更新节流（每账户 60 秒内最多更新一次，使用 LRU 防止内存泄漏）
 const lastUsedAtThrottle = new LRUCache(1000) // 最多缓存 1000 个账户
@@ -633,6 +634,18 @@ class OpenAIResponsesRelayService {
           const modelToRecord = actualModel || requestedModel || 'gpt-4'
 
           const serviceTier = req._serviceTier || null
+          const _usageSessionId =
+            req.headers['session_id'] ||
+            req.headers['x-session-id'] ||
+            req.body?.session_id ||
+            req.body?.conversation_id ||
+            req.body?.previous_response_id ||
+            null
+          const _usageExtra = {
+            sessionId: _usageSessionId || null,
+            userInput: extractUserInput(req.body, 'openai'),
+            projectType: classifyProjectType(req.body, 'openai')
+          }
           await apiKeyService.recordUsage(
             apiKeyData.id,
             actualInputTokens, // 传递实际输入（不含缓存）
@@ -642,7 +655,9 @@ class OpenAIResponsesRelayService {
             modelToRecord,
             account.id,
             'openai-responses',
-            serviceTier
+            serviceTier,
+            null,
+            _usageExtra
           )
 
           logger.info(
@@ -765,6 +780,18 @@ class OpenAIResponsesRelayService {
           usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens
 
         const serviceTier = req._serviceTier || null
+        const _usageSessionId =
+          req.headers['session_id'] ||
+          req.headers['x-session-id'] ||
+          req.body?.session_id ||
+          req.body?.conversation_id ||
+          req.body?.previous_response_id ||
+          null
+        const _usageExtra = {
+          sessionId: _usageSessionId || null,
+          userInput: extractUserInput(req.body, 'openai'),
+          projectType: classifyProjectType(req.body, 'openai')
+        }
         await apiKeyService.recordUsage(
           apiKeyData.id,
           actualInputTokens, // 传递实际输入（不含缓存）
@@ -774,7 +801,9 @@ class OpenAIResponsesRelayService {
           actualModel,
           account.id,
           'openai-responses',
-          serviceTier
+          serviceTier,
+          null,
+          _usageExtra
         )
 
         logger.info(

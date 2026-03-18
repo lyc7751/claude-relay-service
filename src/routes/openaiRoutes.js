@@ -15,6 +15,7 @@ const ProxyHelper = require('../utils/proxyHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { IncrementalSSEParser } = require('../utils/sseParser')
 const { getSafeMessage } = require('../utils/errorSanitizer')
+const { extractUserInput, classifyProjectType } = require('../utils/userInputExtractor')
 
 // Codex CLI 系统提示词（非 Codex CLI 客户端请求时注入，统一端点也使用）
 const CODEX_CLI_INSTRUCTIONS =
@@ -627,6 +628,13 @@ const handleResponses = async (req, res) => {
           // 计算实际输入token（总输入减去缓存部分）
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
+          const _userInput = extractUserInput(req.body, 'openai')
+          const _usageExtra = {
+            sessionId: sessionHash || null,
+            userInput: _userInput,
+            projectType: classifyProjectType(req.body, 'openai')
+          }
+
           const nonStreamCosts = await apiKeyService.recordUsage(
             apiKeyData.id,
             actualInputTokens, // 传递实际输入（不含缓存）
@@ -636,7 +644,8 @@ const handleResponses = async (req, res) => {
             actualModel,
             accountId,
             'openai',
-            req._serviceTier
+            req._serviceTier,
+            _usageExtra
           )
 
           logger.info(
@@ -745,6 +754,13 @@ const handleResponses = async (req, res) => {
           // 使用响应中的真实 model，如果没有则使用请求中的 model，最后回退到默认值
           const modelToRecord = actualModel || requestedModel || 'gpt-4'
 
+          const _userInput = extractUserInput(req.body, 'openai')
+          const _usageExtra = {
+            sessionId: sessionHash || null,
+            userInput: _userInput,
+            projectType: classifyProjectType(req.body, 'openai')
+          }
+
           const streamCosts = await apiKeyService.recordUsage(
             apiKeyData.id,
             actualInputTokens, // 传递实际输入（不含缓存）
@@ -754,7 +770,8 @@ const handleResponses = async (req, res) => {
             modelToRecord,
             accountId,
             'openai',
-            req._serviceTier
+            req._serviceTier,
+            _usageExtra
           )
 
           logger.info(

@@ -26,6 +26,7 @@ const {
   handleAnthropicCountTokensToGemini
 } = require('../services/anthropicGeminiBridgeService')
 const webhookService = require('../services/webhookService')
+const { extractUserInput, classifyProjectType } = require('../utils/userInputExtractor')
 const router = express.Router()
 
 // 每日通知缓存：apiKeyName -> 日期
@@ -293,6 +294,13 @@ async function handleMessagesRequest(req, res) {
       // 生成会话哈希用于sticky会话
       const sessionHash = sessionHelper.generateSessionHash(req.body)
 
+      const _userInput = extractUserInput(req.body, 'anthropic')
+      const _usageExtra = {
+        sessionId: sessionHash || null,
+        userInput: _userInput,
+        projectType: classifyProjectType(req.body, 'anthropic')
+      }
+
       // 🔒 全局会话绑定验证
       let forcedAccount = null
       let needSessionBinding = false
@@ -503,7 +511,14 @@ async function handleMessagesRequest(req, res) {
               }
 
               apiKeyService
-                .recordUsageWithDetails(_apiKeyId, usageObject, model, usageAccountId, accountType)
+                .recordUsageWithDetails(
+                  _apiKeyId,
+                  usageObject,
+                  model,
+                  usageAccountId,
+                  accountType,
+                  _usageExtra
+                )
                 .then((costs) => {
                   queueRateLimitUpdate(
                     _rateLimitInfo,
@@ -634,7 +649,8 @@ async function handleMessagesRequest(req, res) {
                   usageObject,
                   model,
                   usageAccountId,
-                  'claude-console'
+                  'claude-console',
+                  _usageExtra
                 )
                 .then((costs) => {
                   queueRateLimitUpdate(
@@ -715,7 +731,8 @@ async function handleMessagesRequest(req, res) {
                 0,
                 result.model,
                 accountId,
-                'bedrock'
+                'bedrock',
+                _usageExtra
               )
               .then((costs) => {
                 queueRateLimitUpdate(
@@ -838,7 +855,14 @@ async function handleMessagesRequest(req, res) {
               }
 
               apiKeyService
-                .recordUsageWithDetails(_apiKeyIdCcr, usageObject, model, usageAccountId, 'ccr')
+                .recordUsageWithDetails(
+                  _apiKeyIdCcr,
+                  usageObject,
+                  model,
+                  usageAccountId,
+                  'ccr',
+                  _usageExtra
+                )
                 .then((costs) => {
                   queueRateLimitUpdate(
                     _rateLimitInfoCcr,
@@ -961,6 +985,13 @@ async function handleMessagesRequest(req, res) {
 
       // 生成会话哈希用于sticky会话
       const sessionHash = sessionHelper.generateSessionHash(req.body)
+
+      const _userInputNonStream = extractUserInput(req.body, 'anthropic')
+      const _usageExtraNonStream = {
+        sessionId: sessionHash || null,
+        userInput: _userInputNonStream,
+        projectType: classifyProjectType(req.body, 'anthropic')
+      }
 
       // 🔒 全局会话绑定验证（非流式）
       let forcedAccountNonStream = null
@@ -1262,7 +1293,8 @@ async function handleMessagesRequest(req, res) {
             usageObject,
             model,
             responseAccountId,
-            accountType
+            accountType,
+            _usageExtraNonStream
           )
 
           await queueRateLimitUpdate(
