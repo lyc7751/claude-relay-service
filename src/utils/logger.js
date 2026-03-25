@@ -162,7 +162,9 @@ const createFileFormat = () =>
     winston.format.printf(({ level, message, timestamp, stack, ...rest }) => {
       const entry = { ts: timestamp, lvl: level, msg: message }
       const reqId = getReqId()
-      if (reqId) entry.reqId = reqId
+      if (reqId) {
+        entry.reqId = reqId
+      }
       // 合并所有 metadata
       for (const [k, v] of Object.entries(rest)) {
         if (k !== 'level' && k !== 'message' && k !== 'timestamp' && k !== 'stack') {

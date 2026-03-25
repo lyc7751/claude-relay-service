@@ -491,7 +491,7 @@ class ClaudeConsoleAccountService {
         )
         upstreamErrorHelper
           .recordErrorHistory(accountId, 'claude-console', 429, 'rate_limit')
-          .catch(() => {})
+          .catch(() => { })
         return { success: true, skipped: true }
       }
 
@@ -734,7 +734,7 @@ class ClaudeConsoleAccountService {
         )
         upstreamErrorHelper
           .recordErrorHistory(accountId, 'claude-console', 401, 'auth_error')
-          .catch(() => {})
+          .catch(() => { })
         return { success: true, skipped: true }
       }
 
@@ -791,7 +791,7 @@ class ClaudeConsoleAccountService {
         )
         upstreamErrorHelper
           .recordErrorHistory(accountId, 'claude-console', 403, 'server_error')
-          .catch(() => {})
+          .catch(() => { })
         return { success: true, skipped: true }
       }
 
@@ -979,7 +979,7 @@ class ClaudeConsoleAccountService {
         )
         upstreamErrorHelper
           .recordErrorHistory(accountId, 'claude-console', 529, 'overload')
-          .catch(() => {})
+          .catch(() => { })
         return { success: true, skipped: true }
       }
 
@@ -1327,7 +1327,7 @@ class ClaudeConsoleAccountService {
       const currentDailyCost = usageStats.daily.cost || 0
 
       // 获取账户配置
-      let accountData = await this.getAccount(accountId)
+      const accountData = await this.getAccount(accountId)
       if (!accountData) {
         logger.warn(`Account not found: ${accountId}`)
         return
@@ -1523,7 +1523,7 @@ class ClaudeConsoleAccountService {
       logger.success(`Reset all error status for Claude Console account ${accountId}`)
 
       // 清除临时不可用状态
-      await upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-console').catch(() => {})
+      await upstreamErrorHelper.clearTempUnavailable(accountId, 'claude-console').catch(() => { })
 
       // 发送 Webhook 通知
       try {
