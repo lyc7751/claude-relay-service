@@ -1672,7 +1672,8 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       icon, // 新增：图标
       serviceRates, // API Key 级别服务倍率
       weeklyResetDay, // 周费用重置日 (1-7)
-      weeklyResetHour // 周费用重置时 (0-23)
+      weeklyResetHour, // 周费用重置时 (0-23)
+      translateReasoning // 是否启用思考链路翻译
     } = req.body
 
     // 输入验证
@@ -1894,7 +1895,8 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       weeklyResetHour:
         weeklyResetHour !== undefined && weeklyResetHour !== null && weeklyResetHour !== ''
           ? Number(weeklyResetHour)
-          : 0
+          : 0,
+      translateReasoning: translateReasoning === true || translateReasoning === 'true'
     })
 
     logger.success(`🔑 Admin created new API key: ${name}`)
@@ -2309,7 +2311,8 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
       ownerId, // 新增：所有者ID字段
       serviceRates, // API Key 级别服务倍率
       weeklyResetDay, // 周费用重置日 (1-7)
-      weeklyResetHour // 周费用重置时 (0-23)
+      weeklyResetHour, // 周费用重置时 (0-23)
+      translateReasoning // 是否启用思考链路翻译
     } = req.body
 
     // 只允许更新指定字段
@@ -2563,6 +2566,11 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
       }
       updates.weeklyResetHour = hour
       resetConfigChanged = true
+    }
+
+    // 处理思考链路翻译开关
+    if (translateReasoning !== undefined && translateReasoning !== null) {
+      updates.translateReasoning = translateReasoning === true || translateReasoning === 'true'
     }
 
     // 处理活跃/禁用状态状态, 放在过期处理后，以确保后续增加禁用key功能

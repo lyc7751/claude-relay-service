@@ -19,6 +19,11 @@ const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const pricingService = require('../services/pricingService')
 const { getEffectiveModel } = require('../utils/modelHelper')
 const { buildUsageMetadata } = require('../utils/userInputExtractor')
+const {
+  applyReasoningTranslation,
+  shouldTranslateForKey
+} = require('../utils/reasoningTranslationTransformer')
+const config = require('../../config/config')
 
 // 🔧 辅助函数：检查 API Key 权限
 function checkPermissions(apiKeyData, requiredPermission = 'claude') {
@@ -343,7 +348,7 @@ async function handleChatCompletion(req, res, apiKeyData) {
           const cacheCreateTokens =
             (usage.cache_creation && typeof usage.cache_creation === 'object'
               ? (usage.cache_creation.ephemeral_5m_input_tokens || 0) +
-                (usage.cache_creation.ephemeral_1h_input_tokens || 0)
+              (usage.cache_creation.ephemeral_1h_input_tokens || 0)
               : usage.cache_creation_input_tokens || 0) || 0
           const cacheReadTokens = usage.cache_read_input_tokens || 0
           const usageWithRequestMeta = { ...usage }
@@ -409,6 +414,15 @@ async function handleChatCompletion(req, res, apiKeyData) {
         const transformedChunk = openaiToClaude.convertStreamChunk(chunk, req.body.model, sessionId)
         collectStreamAssistantContent(transformedChunk)
         return transformedChunk
+      }
+
+      // 思考链路翻译：Key 名称命中 TRANSLATE_KEY_NAMES 时生效
+      if (shouldTranslateForKey(apiKeyData.name)) {
+        applyReasoningTranslation(res, {
+          keyId: apiKeyData.id,
+          model: config.translation.model
+        })
+        logger.debug(`🌐 [ReasoningTranslation] 已为 API Key "${apiKeyData.name}" 启用思考链路翻译`)
       }
 
       // 根据账户类型选择转发服务
@@ -502,7 +516,7 @@ async function handleChatCompletion(req, res, apiKeyData) {
         const cacheCreateTokens =
           (usage.cache_creation && typeof usage.cache_creation === 'object'
             ? (usage.cache_creation.ephemeral_5m_input_tokens || 0) +
-              (usage.cache_creation.ephemeral_1h_input_tokens || 0)
+            (usage.cache_creation.ephemeral_1h_input_tokens || 0)
             : usage.cache_creation_input_tokens || 0) || 0
         const cacheReadTokens = usage.cache_read_input_tokens || 0
         const usageWithRequestMeta = { ...usage }
